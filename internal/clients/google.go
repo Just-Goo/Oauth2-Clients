@@ -5,28 +5,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	_ "github.com/joho/godotenv/autoload"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
 
-type user struct {
-	Name  string
-	Email string
+type User struct {
+	Name         string
+	Email        string
+	AccessToken  string
+	RefreshToken string
+	Expiry       time.Time
 }
 
 type GoogleClient struct {
 	Port string
 
 	// In memory session storage. In a production application, you will want to store this in a database.
-	AccessToken  string
-	RefreshToken string
-	UserInfo     *user
+	UserInfo *User
 }
 
 func NewGoogleClient(port string) *GoogleClient {
@@ -65,7 +66,7 @@ func (g *GoogleClient) Index(w http.ResponseWriter, r *http.Request) {
 
 func (g *GoogleClient) Login(w http.ResponseWriter, r *http.Request) {
 	googleConfig := g.setupConfig()
-	url := googleConfig.AuthCodeURL("authstate")
+	url := googleConfig.AuthCodeURL("authstate", oauth2.AccessTypeOffline)
 
 	// redirect to google login page
 	http.Redirect(w, r, url, http.StatusSeeOther)
@@ -97,29 +98,31 @@ func (g *GoogleClient) Callback(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "code - token exchange failed")
 	}
 
+	user := User{
+		AccessToken:  token.AccessToken,
+		RefreshToken: token.RefreshToken,
+		Expiry:       token.Expiry,
+	}
+
 	// get user info from google api
 	resp, err := http.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + token.AccessToken)
 	if err != nil {
 		fmt.Fprintln(w, "user data fetch failed")
 	}
 
-	// parse response
-	userInfo, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Fprintln(w, "failed to parse response body")
+	// decode response
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		fmt.Fprintln(w, "failed to decode response body")
 	}
 
 	defer resp.Body.Close()
 
-	user := user{}
-
-	if err := json.Unmarshal(userInfo, &user); err != nil {
-		fmt.Fprintln(w, "failed to unmarshal data")
-	}
-
 	g.UserInfo = &user
 
-	log.Println(g.UserInfo)
+	log.Printf("%+v", g.UserInfo)
 
 	fmt.Fprintln(w, "Login successful:", g.UserInfo.Name, " - ", g.UserInfo.Email)
+
+	// redirect user
+	// http.Redirect(w, r, "/dashboard", http.StatusTemporaryRedirect)
 }
